@@ -127,85 +127,91 @@ function fmt(n: number) {
 }
 
 // ── Изометрия ─────────────────────────────────────────────────────────────────
-// Камера смотрит спереди-слева сверху.
-// Видны 3 грани: передняя (Y=yMin), правая (X=xMax), верхняя (Z=zMax).
-// Скрытые грани: задняя, левая, нижняя — они за видимыми.
-// Painter's algorithm: задняя→левая→правая→передняя→верхняя.
+// Система координат: X вправо, Y вглубь (от зрителя), Z вверх.
+// Камера: сверху-спереди-слева. Видимые грани: передняя (Y=0), правая (X=w), верхняя (Z=h).
+// Painter's order (дальние → ближние): нижняя, задняя, левая, правая, передняя, верхняя.
 
-const COS30 = Math.cos(Math.PI / 6);
-const SIN30 = Math.sin(Math.PI / 6);
+const COS30 = Math.cos(Math.PI / 6); // ≈ 0.866
+const SIN30 = Math.sin(Math.PI / 6); // = 0.5
 
-// 3D → 2D SVG. X вправо, Y вглубь, Z вверх.
 function proj(x: number, y: number, z: number, ox: number, oy: number): [number, number] {
-  return [ox + (x - y) * COS30, oy - z + (x + y) * SIN30];
+  // Стандартная изометрия: X идёт вправо-вниз, Y — влево-вниз, Z — вверх
+  return [
+    ox + (x - y) * COS30,
+    oy - z + (x + y) * SIN30,
+  ];
 }
 
 function pts2path(pts: [number, number][]): string {
   return pts.map(([px, py], i) => `${i === 0 ? 'M' : 'L'}${px.toFixed(1)},${py.toFixed(1)}`).join(' ') + 'Z';
 }
 
+
 interface BoxColors {
-  top:   string;  // верхняя грань — самая светлая (свет сверху)
-  front: string;  // передняя (Y-min) — средняя
-  side:  string;  // правая (X-max) — самая тёмная
-  back:  string;  // задняя (Y-max) — чуть темнее передней
-  left:  string;  // левая (X-min) — темнее передней
+  top:   string;  // верх — самая светлая (прямой свет сверху)
+  front: string;  // передняя (Y=0) — средняя освещённость
+  right: string;  // правая (X=w) — тёмная (в тени)
+  back:  string;  // задняя + левая — почти чёрная
 }
 
 function makeColors(hexBase: string): BoxColors {
-  const r = parseInt(hexBase.slice(1,3),16);
-  const g = parseInt(hexBase.slice(3,5),16);
-  const b = parseInt(hexBase.slice(5,7),16);
-  const h2 = (rv: number, gv: number, bv: number) => {
-    const clamp = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
-    return `#${clamp(r*rv).toString(16).padStart(2,'0')}${clamp(g*gv).toString(16).padStart(2,'0')}${clamp(b*bv).toString(16).padStart(2,'0')}`;
+  const ri = parseInt(hexBase.slice(1,3),16);
+  const gi = parseInt(hexBase.slice(3,5),16);
+  const bi = parseInt(hexBase.slice(5,7),16);
+  const mk = (f: number) => {
+    const c = (v: number) => Math.max(0, Math.min(255, Math.round(v*f)));
+    return `#${c(ri).toString(16).padStart(2,'0')}${c(gi).toString(16).padStart(2,'0')}${c(bi).toString(16).padStart(2,'0')}`;
   };
   return {
-    top:   h2(1.45, 1.45, 1.45),
-    front: h2(1.05, 1.05, 1.05),
-    side:  h2(0.60, 0.60, 0.60),
-    back:  h2(0.75, 0.75, 0.75),
-    left:  h2(0.80, 0.80, 0.80),
+    top:   mk(1.55),   // очень светлая
+    front: mk(0.85),   // чуть темнее базы — хорошо читаемая
+    right: mk(0.50),   // тёмная боковая
+    back:  mk(0.35),   // почти чёрная задняя/левая
   };
 }
 
-// Полный куб — все 6 граней, правильный painter's order для изометрии сверху-слева.
-// Рисуем: задняя → левая → нижняя → правая → передняя → верхняя
+// IsoBox — полный параллелепипед, все 6 граней, правильный Z-order.
+// Дополнительно на переднюю грань накладывается диагональный блик (highlight).
 function IsoBox({
-  x, y, z, w, d, h, colors, ox, oy, sw = 0.5,
+  x, y, z, w, d, h, colors, ox, oy, sw = 0.5, highlight = false,
 }: {
   x: number; y: number; z: number;
   w: number; d: number; h: number;
-  colors: BoxColors; ox: number; oy: number; sw?: number;
+  colors: BoxColors; ox: number; oy: number;
+  sw?: number; highlight?: boolean;
 }) {
   const p = (dx: number, dy: number, dz: number): [number,number] =>
     proj(x + dx*w, y + dy*d, z + dz*h, ox, oy);
+  const sc = '#0a0a0a';
 
-  const s = '#0f0f0f';
+  // Все 6 граней
+  const fBot   = pts2path([p(0,0,0), p(1,0,0), p(1,1,0), p(0,1,0)]);
+  const fBack  = pts2path([p(0,1,0), p(1,1,0), p(1,1,1), p(0,1,1)]);
+  const fLeft  = pts2path([p(0,0,0), p(0,1,0), p(0,1,1), p(0,0,1)]);
+  const fRight = pts2path([p(1,0,0), p(1,1,0), p(1,1,1), p(1,0,1)]);
+  const fFront = pts2path([p(0,0,0), p(1,0,0), p(1,0,1), p(0,0,1)]);
+  const fTop   = pts2path([p(0,0,1), p(1,0,1), p(1,1,1), p(0,1,1)]);
 
-  // 6 граней
-  const faceBack  = pts2path([p(0,1,0), p(1,1,0), p(1,1,1), p(0,1,1)]);  // Y=d
-  const faceLeft  = pts2path([p(0,0,0), p(0,1,0), p(0,1,1), p(0,0,1)]);  // X=0
-  const faceBot   = pts2path([p(0,0,0), p(1,0,0), p(1,1,0), p(0,1,0)]);  // Z=0
-  const faceRight = pts2path([p(1,0,0), p(1,1,0), p(1,1,1), p(1,0,1)]);  // X=w
-  const faceFront = pts2path([p(0,0,0), p(1,0,0), p(1,0,1), p(0,0,1)]);  // Y=0
-  const faceTop   = pts2path([p(0,0,1), p(1,0,1), p(1,1,1), p(0,1,1)]);  // Z=h
+  // Блик на передней грани: тонкая светлая полоса по диагонали (верхний-левый угол)
+  const hlPts = highlight ? pts2path([p(0.02,0,0.96), p(0.22,0,0.96), p(0.02,0,0.65)]) : '';
 
   return (
     <g>
-      <path d={faceBot}   fill={colors.back}  stroke={s} strokeWidth={sw} strokeLinejoin="round"/>
-      <path d={faceBack}  fill={colors.back}  stroke={s} strokeWidth={sw} strokeLinejoin="round"/>
-      <path d={faceLeft}  fill={colors.left}  stroke={s} strokeWidth={sw} strokeLinejoin="round"/>
-      <path d={faceRight} fill={colors.side}  stroke={s} strokeWidth={sw} strokeLinejoin="round"/>
-      <path d={faceFront} fill={colors.front} stroke={s} strokeWidth={sw} strokeLinejoin="round"/>
-      <path d={faceTop}   fill={colors.top}   stroke={s} strokeWidth={sw} strokeLinejoin="round"/>
+      <path d={fBot}   fill={colors.back}  stroke={sc} strokeWidth={sw} strokeLinejoin="round"/>
+      <path d={fBack}  fill={colors.back}  stroke={sc} strokeWidth={sw} strokeLinejoin="round"/>
+      <path d={fLeft}  fill={colors.back}  stroke={sc} strokeWidth={sw} strokeLinejoin="round"/>
+      <path d={fRight} fill={colors.right} stroke={sc} strokeWidth={sw} strokeLinejoin="round"/>
+      <path d={fFront} fill={colors.front} stroke={sc} strokeWidth={sw} strokeLinejoin="round"/>
+      <path d={fTop}   fill={colors.top}   stroke={sc} strokeWidth={sw} strokeLinejoin="round"/>
+      {highlight && hlPts && (
+        <path d={hlPts} fill="rgba(255,255,255,0.18)" stroke="none"/>
+      )}
     </g>
   );
 }
 
-// Стела с фигурным верхом — все 6 граней.
-// Для арки и фигурной формы боковые грани остаются прямоугольными (одинаковая глубина),
-// а передняя и задняя — фигурные. Верхней плоской грани нет (есть скошенный верх).
+// IsoStele — стела с фигурным верхом. Все грани строятся через proj().
+// Декор на передней грани передаётся через children и позиционируется в изо-пространстве.
 function IsoStele({
   x, y, z, w, d, h, shape, colors, ox, oy,
 }: {
@@ -215,68 +221,60 @@ function IsoStele({
 }) {
   const p3 = (dx: number, dy: number, dz: number): [number,number] =>
     proj(x+dx, y+dy, z+dz, ox, oy);
+  const sc = '#0a0a0a';
 
-  const s = '#0f0f0f';
-
-  // Генерирует точки профиля верха стелы при y=yOff
-  const profilePts = (yOff: number): [number,number][] => {
+  // Профиль передней/задней грани (yOff = 0 или d)
+  const profile = (yOff: number): [number,number][] => {
     if (shape === 'arch') {
       const arcR = w / 2;
-      const archBase = h - arcR;
-      const pts: [number,number][] = [
-        p3(0, yOff, 0), p3(w, yOff, 0),
-        p3(w, yOff, archBase),
-      ];
-      const steps = 20;
-      for (let i = 0; i <= steps; i++) {
-        const t = (i / steps) * Math.PI;
-        pts.push(proj(x + w/2 + arcR*Math.cos(Math.PI-t), y+yOff, z + archBase + arcR*Math.sin(t), ox, oy));
+      const arcBase = h - arcR;
+      const pts: [number,number][] = [p3(0,yOff,0), p3(w,yOff,0), p3(w,yOff,arcBase)];
+      for (let i = 0; i <= 24; i++) {
+        const t = (i / 24) * Math.PI;
+        pts.push(proj(x + w/2 + arcR*Math.cos(Math.PI-t), y+yOff, z+arcBase+arcR*Math.sin(t), ox, oy));
       }
-      pts.push(p3(0, yOff, archBase));
+      pts.push(p3(0,yOff,arcBase));
       return pts;
     }
     if (shape === 'peak') {
       return [
-        p3(0,   yOff, 0),
-        p3(w,   yOff, 0),
-        p3(w,   yOff, h*0.78),
-        p3(w*0.72, yOff, h*0.92),
-        p3(w*0.5,  yOff, h),
-        p3(w*0.28, yOff, h*0.92),
-        p3(0,   yOff, h*0.78),
+        p3(0,   yOff, 0),      p3(w,     yOff, 0),
+        p3(w,   yOff, h*0.76), p3(w*0.72,yOff, h*0.90),
+        p3(w*0.5,yOff, h),     p3(w*0.28,yOff, h*0.90),
+        p3(0,   yOff, h*0.76),
       ];
     }
-    // rect
     return [p3(0,yOff,0), p3(w,yOff,0), p3(w,yOff,h), p3(0,yOff,h)];
   };
 
-  const frontPts = profilePts(0);
-  const backPts  = profilePts(d);
+  const frontPts = profile(0);
+  const backPts  = profile(d);
 
-  // Нижняя грань (z=0) — всегда прямоугольник
-  const faceBot  = pts2path([p3(0,0,0), p3(w,0,0), p3(w,d,0), p3(0,d,0)]);
-  // Задняя грань (y=d)
-  const faceBack = pts2path(backPts);
-  // Левая грань (x=0) — прямоугольник нужной высоты
-  const leftH = shape === 'rect' ? h : shape === 'peak' ? h*0.78 : (h - w/2);
-  const faceLeft = pts2path([p3(0,0,0), p3(0,d,0), p3(0,d,leftH), p3(0,0,leftH)]);
-  // Правая грань (x=w)
-  const faceRight = pts2path([p3(w,0,0), p3(w,d,0), p3(w,d,leftH), p3(w,0,leftH)]);
-  // Передняя грань (y=0)
-  const faceFront = pts2path(frontPts);
-  // Верхняя плоская грань только для rect
-  const faceTop = pts2path([p3(0,0,h), p3(w,0,h), p3(w,d,h), p3(0,d,h)]);
+  // Высота боковых граней по форме
+  const sideH = shape === 'rect' ? h : shape === 'peak' ? h*0.76 : (h - w/2);
+
+  const fBot   = pts2path([p3(0,0,0), p3(w,0,0), p3(w,d,0), p3(0,d,0)]);
+  const fBack  = pts2path(backPts);
+  const fLeft  = pts2path([p3(0,0,0), p3(0,d,0), p3(0,d,sideH), p3(0,0,sideH)]);
+  const fRight = pts2path([p3(w,0,0), p3(w,d,0), p3(w,d,sideH), p3(w,0,sideH)]);
+  const fFront = pts2path(frontPts);
+  const fTop   = pts2path([p3(0,0,h), p3(w,0,h), p3(w,d,h), p3(0,d,h)]);
+
+  // Блик: верхний левый угол передней грани
+  const hlPts  = pts2path([p3(0.5,0,h-2), p3(w*0.25,0,h-2), p3(0.5,0,h*0.6)]);
 
   return (
     <g>
-      <path d={faceBot}   fill={colors.back}  stroke={s} strokeWidth={0.5} strokeLinejoin="round"/>
-      <path d={faceBack}  fill={colors.back}  stroke={s} strokeWidth={0.5} strokeLinejoin="round"/>
-      <path d={faceLeft}  fill={colors.left}  stroke={s} strokeWidth={0.5} strokeLinejoin="round"/>
-      <path d={faceRight} fill={colors.side}  stroke={s} strokeWidth={0.5} strokeLinejoin="round"/>
-      <path d={faceFront} fill={colors.front} stroke={s} strokeWidth={0.5} strokeLinejoin="round"/>
+      <path d={fBot}   fill={colors.back}  stroke={sc} strokeWidth={0.5} strokeLinejoin="round"/>
+      <path d={fBack}  fill={colors.back}  stroke={sc} strokeWidth={0.5} strokeLinejoin="round"/>
+      <path d={fLeft}  fill={colors.back}  stroke={sc} strokeWidth={0.5} strokeLinejoin="round"/>
+      <path d={fRight} fill={colors.right} stroke={sc} strokeWidth={0.5} strokeLinejoin="round"/>
+      <path d={fFront} fill={colors.front} stroke={sc} strokeWidth={0.5} strokeLinejoin="round"/>
       {shape === 'rect' && (
-        <path d={faceTop} fill={colors.top} stroke={s} strokeWidth={0.5} strokeLinejoin="round"/>
+        <path d={fTop}  fill={colors.top}  stroke={sc} strokeWidth={0.5} strokeLinejoin="round"/>
       )}
+      {/* Блик на полированном граните */}
+      <path d={hlPts} fill="rgba(255,255,255,0.12)" stroke="none"/>
     </g>
   );
 }
@@ -298,9 +296,12 @@ function MonumentPreview({ config }: { config: ConfigState }) {
   const OX = SVG_W / 2 - 10;
   const OY = SVG_H - 55;
 
-  // ─ Размеры всех элементов ─
+  // ─ Размеры ─
+  // Система координат: памятник стоит у Y=0 (передняя стенка), уходит вглубь (Y+).
+  // Покрытие могилы находится ПЕРЕД памятником: от Y = -coverDepth до Y = 0.
+
   const sW = twoPersons ? 88 : 54;
-  const sD = 14;
+  const sD = 14;   // глубина стелы
   const sH = config.stele === 'stele-combo' ? 130
     : config.stele === 'stele-arch' ? 145
     : config.stele === 'stele-figured' ? 148 : 138;
@@ -314,33 +315,52 @@ function MonumentPreview({ config }: { config: ConfigState }) {
   const plateH = hasPlate ? 7 : 0;
   const plateW = sW + 28; const plateD = sD + 44;
 
-  const coverH = hasCover ? 5 : 0;
-  const coverW = plateW + 4; const coverD = plateD + 4;
+  // Покрытие — перед памятником (отрицательный Y)
+  const coverDepth = 80;   // насколько уходит вперёд
+  const coverWid   = sW + 36;
+  const coverH     = hasCover ? 5 : 0;
 
-  const flowerH = hasFlowerbed ? 10 : 0;
-  const flowerW = sW + 46; const flowerD = sD + 70;
+  // Цветник — бортик вокруг могилы (тоже перед памятником + по бокам)
+  const flowerH    = hasFlowerbed ? 10 : 0;
+  const flowerW    = sW + 50;
+  const flowerFront = 90;  // насколько цветник выступает вперёд
 
-  // ─ Z-стеки: всё начинается от 0 ─
+  // ─ Z-стеки (снизу вверх) ─
   let curZ = 0;
-  const flowerZ = curZ; curZ += flowerH;
-  const coverZ  = curZ; curZ += coverH;
-  const plateZ  = curZ; curZ += plateH;
-  const tombZ   = curZ; curZ += tombH;
-  const pedZ    = curZ; curZ += pedH;
-  const steleZ  = curZ;
+  const tombZ  = curZ; curZ += tombH;
+  const pedZ   = curZ; curZ += pedH;
+  const steleZ = curZ;
 
-  // ─ Центровка: каждый элемент симметричен по x и y ─
-  const cx = (w: number) => -w / 2;
-  const cy2 = (d: number) => -d / 2;
+  // Плита и цветник — на уровне земли (z=0)
+  const plateZ  = 0;
+  const coverZ  = 0;
+  const flowerZ = 0;
+
+  // ─ Центровка по X (памятник по центру, Y=0 — передняя стенка) ─
+  const sX = -sW / 2;
+  const sY = 0;             // передняя стенка стелы = Y=0
+
+  // Остальные блоки тоже выровнены по центру X, задняя стенка = Y=sD (уходит вглубь)
+  const pedX = -pedW / 2;   const pedY = -(pedD - sD) / 2;  // немного выступает спереди/сзади
+  const tombX = -tombW / 2; const tombY = -(tombD - sD) / 2;
+
+  // Плита (горизонтальная, лежит на земле вровень со стелой по X)
+  const plateX = -plateW / 2; const plateY = sD; // сразу за стелой
+
+  // Покрытие могилы — перед стелой (y отрицательный = перед камерой)
+  const covX = -coverWid / 2; const covY = -coverDepth;
+
+  // Цветник — бортик вокруг могилы, перед стелой
+  const flX = -flowerW / 2; const flY = -flowerFront;
 
   // ─ Цвета ─
-  const GRANITE     = makeColors('#2c2c2c');
-  const GRANITE_LT  = makeColors('#383838');
-  const PAVING      = makeColors('#7a6a58');
-  const GRAVEL      = makeColors('#c0b49a');
-  const TILE        = makeColors('#484848');
-  const GRASS       = makeColors('#5a7840');
-  const GRANITE_FL  = makeColors('#303030');
+  const GRANITE    = makeColors('#2c2c2c');
+  const GRANITE_LT = makeColors('#3a3a3a');
+  const PAVING     = makeColors('#7a6a58');
+  const GRAVEL     = makeColors('#c8bc9e');
+  const TILE_C     = makeColors('#4a4a4a');
+  const GRASS      = makeColors('#526838');
+  const GRANITE_FL = makeColors('#303030');
 
   const GOLD = '#C9A84C';
 
@@ -351,13 +371,13 @@ function MonumentPreview({ config }: { config: ConfigState }) {
     : 'rect';
 
   const plateColors  = config.plate === 'pl-paving' ? PAVING : GRANITE;
-  const coverColors  = config.cover === 'cov-gravel' ? GRAVEL : TILE;
+  const coverColors  = config.cover === 'cov-gravel' ? GRAVEL : TILE_C;
   const flowerColors = config.flowerbed === 'fl-granite' ? GRANITE_FL : GRASS;
 
-  // Тень под памятником: центр проекции основания самого широкого элемента
-  const shadowBaseW = hasFlowerbed ? flowerW : hasCover ? coverW : hasPlate ? plateW : hasTomb ? tombW : sW;
-  const shadowBaseD = hasFlowerbed ? flowerD : hasCover ? coverD : hasPlate ? plateD : hasTomb ? tombD : sD;
+  // Тень под памятником
   const [shadowX, shadowY] = proj(0, 0, 0, OX, OY);
+  const shadowRX = Math.max(tombW, sW, coverWid) * 0.45;
+  const shadowRY = Math.max(tombD, sD, coverDepth) * 0.2;
 
   return (
     <svg
@@ -395,37 +415,35 @@ function MonumentPreview({ config }: { config: ConfigState }) {
         return <path d={pts2path(gpts)} fill="url(#gGrad)" stroke="#7A9060" strokeWidth={0.6} />;
       })()}
 
-      {/* Тень от памятника */}
+      {/* Тень */}
       <ellipse
-        cx={shadowX} cy={shadowY + 2}
-        rx={shadowBaseW * 0.5}
-        ry={shadowBaseD * 0.24}
-        fill="rgba(0,0,0,0.20)"
-        filter="url(#blur3)"
+        cx={shadowX + shadowRX * 0.3} cy={shadowY + shadowRY * 0.5}
+        rx={shadowRX} ry={shadowRY}
+        fill="rgba(0,0,0,0.22)" filter="url(#blur3)"
       />
 
-      {/* Цветник */}
-      {hasFlowerbed && (
-        <IsoBox
-          x={cx(flowerW)} y={cy2(flowerD)} z={flowerZ}
-          w={flowerW} d={flowerD} h={flowerH}
-          colors={flowerColors} ox={OX} oy={OY}
-        />
-      )}
-
-      {/* Покрытие */}
+      {/* Покрытие могилы — ПЕРЕД памятником (Y отрицательный = ближе к зрителю) */}
       {hasCover && (
         <IsoBox
-          x={cx(coverW)} y={cy2(coverD)} z={coverZ}
-          w={coverW} d={coverD} h={coverH}
+          x={covX} y={covY} z={coverZ}
+          w={coverWid} d={coverDepth} h={coverH}
           colors={coverColors} ox={OX} oy={OY}
         />
       )}
 
-      {/* Плита */}
+      {/* Цветник — бортик перед памятником */}
+      {hasFlowerbed && (
+        <IsoBox
+          x={flX} y={flY} z={flowerZ}
+          w={flowerW} d={flowerFront} h={flowerH}
+          colors={flowerColors} ox={OX} oy={OY}
+        />
+      )}
+
+      {/* Плита (за стелой, горизонтальная) */}
       {hasPlate && (
         <IsoBox
-          x={cx(plateW)} y={cy2(plateD)} z={plateZ}
+          x={plateX} y={plateY} z={plateZ}
           w={plateW} d={plateD} h={plateH}
           colors={plateColors} ox={OX} oy={OY}
         />
@@ -434,7 +452,7 @@ function MonumentPreview({ config }: { config: ConfigState }) {
       {/* Тумба */}
       {hasTomb && (
         <IsoBox
-          x={cx(tombW)} y={cy2(tombD)} z={tombZ}
+          x={tombX} y={tombY} z={tombZ}
           w={tombW} d={tombD} h={tombH}
           colors={GRANITE} ox={OX} oy={OY}
         />
@@ -443,143 +461,131 @@ function MonumentPreview({ config }: { config: ConfigState }) {
       {/* Цоколь */}
       {hasPedestal && (
         <IsoBox
-          x={cx(pedW)} y={cy2(pedD)} z={pedZ}
+          x={pedX} y={pedY} z={pedZ}
           w={pedW} d={pedD} h={pedH}
           colors={GRANITE} ox={OX} oy={OY}
         />
       )}
 
-      {/* Стела — одинарная или комбинированная */}
+      {/* Стела */}
       {config.stele === 'stele-combo' ? (
-        // Комбинированная: нижняя широкая + верхняя узкая (оба прямоугольные)
         <>
-          <IsoBox
-            x={cx(sW)} y={cy2(sD)} z={steleZ}
+          <IsoBox x={sX} y={sY} z={steleZ}
             w={sW} d={sD} h={sH * 0.42}
-            colors={GRANITE} ox={OX} oy={OY}
-          />
-          <IsoBox
-            x={cx(sW * 0.62)} y={cy2(sD)} z={steleZ + sH * 0.40}
+            colors={GRANITE} ox={OX} oy={OY} highlight />
+          <IsoBox x={sX + sW * 0.19} y={sY} z={steleZ + sH * 0.40}
             w={sW * 0.62} d={sD} h={sH * 0.62}
-            colors={GRANITE_LT} ox={OX} oy={OY}
-          />
+            colors={GRANITE_LT} ox={OX} oy={OY} highlight />
         </>
       ) : (
         <IsoStele
-          x={cx(sW)} y={cy2(sD)} z={steleZ}
+          x={sX} y={sY} z={steleZ}
           w={sW} d={sD} h={sH}
-          shape={shape}
-          colors={steleColors}
+          shape={shape} colors={steleColors}
           ox={OX} oy={OY}
         />
       )}
 
       {/* Ваза */}
       {hasVase && (() => {
-        // Стоит справа от цоколя/тумбы на уровне верха основания
-        const vX = cx(sW) + sW + 6;
-        const vY = cy2(sD) - 2;
-        const vBaseZ = tombH > 0 ? tombZ + tombH : (pedH > 0 ? pedZ + pedH : steleZ);
+        const vBaseZ = tombH > 0 ? tombZ + tombH : pedH > 0 ? pedZ + pedH : steleZ;
         const vH = config.vase === 'vas-modern' ? 26 : 22;
-        const vW = 10; const vD = 10;
-
-        // Рисуем как IsoBox с небольшими пропорциями
+        const vW = 9; const vD = 9;
+        const vX = sX + sW + 4;
+        const vY = sY + 1;
         return (
           <g>
-            <IsoBox
-              x={vX + 1} y={vY + 1} z={vBaseZ}
-              w={vW - 2} d={vD - 2} h={vH * 0.3}
-              colors={GRANITE} ox={OX} oy={OY} sw={0.3}
-            />
-            <IsoBox
-              x={vX + 3} y={vY + 3} z={vBaseZ + vH * 0.28}
-              w={vW - 6} d={vD - 6} h={vH * 0.72}
-              colors={GRANITE} ox={OX} oy={OY} sw={0.3}
-            />
-            <IsoBox
-              x={vX + 1} y={vY + 1} z={vBaseZ + vH}
-              w={vW - 2} d={vD - 2} h={3}
-              colors={GRANITE_LT} ox={OX} oy={OY} sw={0.3}
-            />
+            <IsoBox x={vX}   y={vY}   z={vBaseZ}           w={vW}   d={vD}   h={4}         colors={GRANITE}    ox={OX} oy={OY} sw={0.4}/>
+            <IsoBox x={vX+2} y={vY+2} z={vBaseZ+4}         w={vW-4} d={vD-4} h={vH*0.75}   colors={GRANITE}    ox={OX} oy={OY} sw={0.4}/>
+            <IsoBox x={vX+1} y={vY+1} z={vBaseZ+4+vH*0.75} w={vW-2} d={vD-2} h={vH*0.25}  colors={GRANITE_LT} ox={OX} oy={OY} sw={0.4}/>
           </g>
         );
       })()}
 
-      {/* Декор на стеле */}
+      {/* Декор на передней грани стелы — всё через proj() */}
       {hasDecor && (() => {
-        // Центр фронтальной грани
-        const fcx = cx(sW) + sW / 2;
-        const fcy = cy2(sD);        // y = ближний край (y минимальный)
-        const decorMidZ = steleZ + sH * 0.52;
-        const decorTopZ = steleZ + sH * 0.18;
-        const [mx, my] = proj(fcx, fcy, decorMidZ, OX, OY);
-        const [tx, ty] = proj(fcx, fcy, decorTopZ, OX, OY);
+        const dCX = sX + sW / 2;
+        const dY  = sY;
+        const zTop = steleZ + sH * 0.80;
+        const zMid = steleZ + sH * 0.58;
+
+        const [topX, topY] = proj(dCX, dY, zTop, OX, OY);
+        const [midX, midY] = proj(dCX, dY, zMid, OX, OY);
+
+        // Пикселей на единицу ширины стелы
+        const [pL] = proj(sX,    dY, zMid, OX, OY);
+        const [pR] = proj(sX+sW, dY, zMid, OX, OY);
+        const u = (pR - pL) / sW;
 
         if (config.decor === 'dec-cross' || config.decor === 'dec-cross-port') {
+          const armLen = u * 10; const barH = u * 34;
           return (
-            <g fill={GOLD} opacity={0.9}>
-              <rect x={tx - 2.5} y={ty - 6} width={5} height={38} rx={1} />
-              <rect x={tx - 13} y={ty + 8} width={26} height={5} rx={1} />
-              {config.decor === 'dec-cross-port' && (
-                <>
-                  <rect x={mx - 19} y={my - 22} width={38} height={44}
-                    fill="none" stroke={GOLD} strokeWidth={1.2} rx={2} />
-                  <circle cx={mx} cy={my - 4} r={12} fill="#303030" stroke={GOLD} strokeWidth={0.8} />
-                  <circle cx={mx} cy={my - 7} r={5.5} fill="#3a3a3a" />
-                </>
-              )}
+            <g fill={GOLD} opacity={0.93}>
+              <rect x={topX-2} y={topY} width={4} height={barH} rx={1}/>
+              <rect x={topX-armLen} y={topY+10} width={armLen*2} height={4} rx={1}/>
+              {config.decor === 'dec-cross-port' && (() => {
+                const pw = u*22; const ph = u*24;
+                return (
+                  <g>
+                    <rect x={midX-pw/2} y={midY-ph/2} width={pw} height={ph}
+                      fill={GRANITE_LT.front} stroke={GOLD} strokeWidth={1.2} rx={1}/>
+                    <circle cx={midX} cy={midY-ph*0.08} r={ph*0.24}
+                      fill={GRANITE.back} stroke={GOLD} strokeWidth={0.7}/>
+                  </g>
+                );
+              })()}
             </g>
           );
         }
         if (config.decor === 'dec-portrait') {
+          const pw = u*24; const ph = u*28;
           return (
             <g>
-              <rect x={mx - 21} y={my - 28} width={42} height={48}
-                fill="none" stroke={GOLD} strokeWidth={1.4} rx={2} />
-              <circle cx={mx} cy={my - 10} r={13} fill="#2d2d2d" stroke={GOLD} strokeWidth={0.7} />
-              <circle cx={mx} cy={my - 14} r={6} fill="#404040" />
-              <path d={`M${mx-13},${my+4} Q${mx},${my-2} ${mx+13},${my+4}`} fill="#2d2d2d" />
+              <rect x={midX-pw/2} y={midY-ph/2} width={pw} height={ph}
+                fill={GRANITE_LT.front} stroke={GOLD} strokeWidth={1.3} rx={1}/>
+              <circle cx={midX} cy={midY-ph*0.1} r={ph*0.26}
+                fill={GRANITE.back} stroke={GOLD} strokeWidth={0.7}/>
+              <circle cx={midX} cy={midY-ph*0.17} r={ph*0.11} fill="#555"/>
             </g>
           );
         }
         if (config.decor === 'dec-pattern') {
           return (
-            <g stroke={GOLD} strokeWidth={0.9} fill="none" opacity={0.78}>
-              <path d={`M${tx-20},${ty+6} Q${tx},${ty-10} ${tx+20},${ty+6}`} />
-              <path d={`M${tx-16},${ty+18} Q${tx},${ty+4} ${tx+16},${ty+18}`} />
-              <circle cx={tx} cy={ty + 32} r={11} />
-              <circle cx={tx} cy={ty + 32} r={5} />
-              <line x1={tx-8} y1={ty+32} x2={tx+8} y2={ty+32} />
-              <line x1={tx} y1={ty+24} x2={tx} y2={ty+40} />
+            <g stroke={GOLD} strokeWidth={0.9} fill="none" opacity={0.83}>
+              <path d={`M${topX-u*18},${topY+4} Q${topX},${topY-10} ${topX+u*18},${topY+4}`}/>
+              <path d={`M${topX-u*13},${topY+14} Q${topX},${topY+2} ${topX+u*13},${topY+14}`}/>
+              <circle cx={midX} cy={midY} r={u*12}/>
+              <circle cx={midX} cy={midY} r={u*5}/>
             </g>
           );
         }
         return null;
       })()}
 
-      {/* Гравировка (строки текста) на стеле */}
+      {/* Гравировка — строки текста */}
       {(() => {
-        const fcx = cx(sW) + sW / 2;
-        const fcy = cy2(sD);
-        const lW = sW * 0.5;
-        const baseDecorShift = hasDecor ? sH * 0.38 : 0;
-        const [lx, ly] = proj(fcx, fcy, steleZ + sH * 0.28 - baseDecorShift * 0.3, OX, OY);
+        const dY  = sY;
+        const zTx = steleZ + sH * 0.30;
+        const [lx, ly] = proj(sX + sW/2, dY, zTx, OX, OY);
+        const [pL] = proj(sX,    dY, zTx, OX, OY);
+        const [pR] = proj(sX+sW, dY, zTx, OX, OY);
+        const hw = (pR - pL) * 0.4;
         return (
-          <g opacity={0.22} stroke="white" strokeWidth={1.1} strokeLinecap="round">
-            <line x1={lx - lW * 0.5} y1={ly}      x2={lx + lW * 0.5} y2={ly} />
-            <line x1={lx - lW * 0.4} y1={ly + 8}  x2={lx + lW * 0.4} y2={ly + 8} />
-            <line x1={lx - lW * 0.3} y1={ly + 16} x2={lx + lW * 0.3} y2={ly + 16} />
+          <g opacity={0.24} stroke="white" strokeWidth={1.0} strokeLinecap="round">
+            <line x1={lx-hw}     y1={ly}    x2={lx+hw}     y2={ly}/>
+            <line x1={lx-hw*0.8} y1={ly+8}  x2={lx+hw*0.8} y2={ly+8}/>
+            <line x1={lx-hw*0.6} y1={ly+16} x2={lx+hw*0.6} y2={ly+16}/>
           </g>
         );
       })()}
 
       {/* Разделитель 2 лица */}
       {twoPersons && (() => {
-        const [bx, by] = proj(0, cy2(sD), steleZ, OX, OY);
-        const [tx, ty] = proj(0, cy2(sD), steleZ + sH * 0.9, OX, OY);
+        const [bx, by] = proj(sX+sW/2, sY, steleZ,          OX, OY);
+        const [tx, ty] = proj(sX+sW/2, sY, steleZ+sH*0.92,  OX, OY);
         return (
           <line x1={bx} y1={by} x2={tx} y2={ty}
-            stroke={GOLD} strokeWidth={0.9} strokeDasharray="5 3" opacity={0.55} />
+            stroke={GOLD} strokeWidth={0.9} strokeDasharray="5 3" opacity={0.55}/>
         );
       })()}
 
