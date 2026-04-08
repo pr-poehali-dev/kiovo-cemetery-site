@@ -127,191 +127,155 @@ function fmt(n: number) {
 }
 
 // ── Изометрия ─────────────────────────────────────────────────────────────────
-// Свет приходит сверху-слева → правая грань темнее, левая — средняя, верх — светлее
-// Painter's algorithm: рисуем снизу вверх, сначала дальние грани, потом ближние
+// Камера смотрит спереди-слева сверху.
+// Видны 3 грани: передняя (Y=yMin), правая (X=xMax), верхняя (Z=zMax).
+// Скрытые грани: задняя, левая, нижняя — они за видимыми.
+// Painter's algorithm: задняя→левая→правая→передняя→верхняя.
 
-// Проекция: x вправо, y вглубь (от зрителя), z вверх
-// Изометрия 30°: каждая единица x смещает SVG на (cos30°, sin30°), y на (-cos30°, sin30°)
-const COS30 = Math.cos(Math.PI / 6); // ≈ 0.866
-const SIN30 = Math.sin(Math.PI / 6); // = 0.5
+const COS30 = Math.cos(Math.PI / 6);
+const SIN30 = Math.sin(Math.PI / 6);
 
+// 3D → 2D SVG. X вправо, Y вглубь, Z вверх.
 function proj(x: number, y: number, z: number, ox: number, oy: number): [number, number] {
-  return [
-    ox + (x - y) * COS30,
-    oy - z + (x + y) * SIN30,
-  ];
+  return [ox + (x - y) * COS30, oy - z + (x + y) * SIN30];
 }
 
 function pts2path(pts: [number, number][]): string {
-  return pts.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ') + 'Z';
+  return pts.map(([px, py], i) => `${i === 0 ? 'M' : 'L'}${px.toFixed(1)},${py.toFixed(1)}`).join(' ') + 'Z';
 }
-
-// Все 6 граней куба — строим правильно
-// Грани, видимые в изометрии сверху-слева-сзади: верх, левая (фронт Y-min), правая (правая X-max)
-// Грань левая = Y-min (ближняя к зрителю слева)
-// Грань правая = X-max (правый бок)
-// Порядок рисования: back-left, back-right, back-top, front-bottom, front-left, front-right, top
 
 interface BoxColors {
-  top: string;     // верхняя — светлее всего
-  left: string;    // левая фронтальная — средняя
-  right: string;   // правая боковая — темнее
+  top:   string;  // верхняя грань — самая светлая (свет сверху)
+  front: string;  // передняя (Y-min) — средняя
+  side:  string;  // правая (X-max) — самая тёмная
+  back:  string;  // задняя (Y-max) — чуть темнее передней
+  left:  string;  // левая (X-min) — темнее передней
 }
 
-// Строит полный куб со всеми видимыми гранями (painter's algorithm для изометрии)
+function makeColors(hexBase: string): BoxColors {
+  const r = parseInt(hexBase.slice(1,3),16);
+  const g = parseInt(hexBase.slice(3,5),16);
+  const b = parseInt(hexBase.slice(5,7),16);
+  const h2 = (rv: number, gv: number, bv: number) => {
+    const clamp = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
+    return `#${clamp(r*rv).toString(16).padStart(2,'0')}${clamp(g*gv).toString(16).padStart(2,'0')}${clamp(b*bv).toString(16).padStart(2,'0')}`;
+  };
+  return {
+    top:   h2(1.45, 1.45, 1.45),
+    front: h2(1.05, 1.05, 1.05),
+    side:  h2(0.60, 0.60, 0.60),
+    back:  h2(0.75, 0.75, 0.75),
+    left:  h2(0.80, 0.80, 0.80),
+  };
+}
+
+// Полный куб — все 6 граней, правильный painter's order для изометрии сверху-слева.
+// Рисуем: задняя → левая → нижняя → правая → передняя → верхняя
 function IsoBox({
-  x, y, z, w, d, h, colors, ox, oy, stroke = '#111', sw = 0.5,
+  x, y, z, w, d, h, colors, ox, oy, sw = 0.5,
 }: {
   x: number; y: number; z: number;
   w: number; d: number; h: number;
-  colors: BoxColors;
-  ox: number; oy: number;
-  stroke?: string; sw?: number;
+  colors: BoxColors; ox: number; oy: number; sw?: number;
 }) {
-  // 8 вершин куба
-  const p = (dx: number, dy: number, dz: number) => proj(x + dx * w, y + dy * d, z + dz * h, ox, oy);
+  const p = (dx: number, dy: number, dz: number): [number,number] =>
+    proj(x + dx*w, y + dy*d, z + dz*h, ox, oy);
 
-  // Верхняя грань (z+h): вершины 4 в порядке обхода
-  const top = pts2path([p(0,0,1), p(1,0,1), p(1,1,1), p(0,1,1)]);
-  // Левая (передняя) грань Y=0: фронт
-  const front = pts2path([p(0,0,0), p(1,0,0), p(1,0,1), p(0,0,1)]);
-  // Правая грань X=w
-  const side = pts2path([p(1,0,0), p(1,1,0), p(1,1,1), p(1,0,1)]);
+  const s = '#0f0f0f';
+
+  // 6 граней
+  const faceBack  = pts2path([p(0,1,0), p(1,1,0), p(1,1,1), p(0,1,1)]);  // Y=d
+  const faceLeft  = pts2path([p(0,0,0), p(0,1,0), p(0,1,1), p(0,0,1)]);  // X=0
+  const faceBot   = pts2path([p(0,0,0), p(1,0,0), p(1,1,0), p(0,1,0)]);  // Z=0
+  const faceRight = pts2path([p(1,0,0), p(1,1,0), p(1,1,1), p(1,0,1)]);  // X=w
+  const faceFront = pts2path([p(0,0,0), p(1,0,0), p(1,0,1), p(0,0,1)]);  // Y=0
+  const faceTop   = pts2path([p(0,0,1), p(1,0,1), p(1,1,1), p(0,1,1)]);  // Z=h
 
   return (
     <g>
-      <path d={front} fill={colors.left}  stroke={stroke} strokeWidth={sw} strokeLinejoin="round" />
-      <path d={side}  fill={colors.right} stroke={stroke} strokeWidth={sw} strokeLinejoin="round" />
-      <path d={top}   fill={colors.top}   stroke={stroke} strokeWidth={sw} strokeLinejoin="round" />
+      <path d={faceBot}   fill={colors.back}  stroke={s} strokeWidth={sw} strokeLinejoin="round"/>
+      <path d={faceBack}  fill={colors.back}  stroke={s} strokeWidth={sw} strokeLinejoin="round"/>
+      <path d={faceLeft}  fill={colors.left}  stroke={s} strokeWidth={sw} strokeLinejoin="round"/>
+      <path d={faceRight} fill={colors.side}  stroke={s} strokeWidth={sw} strokeLinejoin="round"/>
+      <path d={faceFront} fill={colors.front} stroke={s} strokeWidth={sw} strokeLinejoin="round"/>
+      <path d={faceTop}   fill={colors.top}   stroke={s} strokeWidth={sw} strokeLinejoin="round"/>
     </g>
   );
 }
 
-// Создать палитру для материала: base — базовый цвет камня
-function makeColors(base: string, lightness: number = 1): BoxColors {
-  // Берём hex, осветляем/затемняем
-  const parse = (h: string) => {
-    const r = parseInt(h.slice(1, 3), 16);
-    const g = parseInt(h.slice(3, 5), 16);
-    const b = parseInt(h.slice(5, 7), 16);
-    return [r, g, b];
-  };
-  const hex = (v: number) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0');
-  const [r, g, b] = parse(base);
-  const toHex = (fr: number, fg: number, fb: number) => `#${hex(r * fr * lightness)}${hex(g * fg * lightness)}${hex(b * fb * lightness)}`;
-  return {
-    top:   toHex(1.35, 1.35, 1.35),   // светлее
-    left:  toHex(1.0,  1.0,  1.0),    // нейтральный
-    right: toHex(0.65, 0.65, 0.65),   // темнее
-  };
-}
-
-// Тень на земле: вытянутый эллипс под объектом
-function GroundShadow({ cx, cy, rx, ry }: { cx: number; cy: number; rx: number; ry: number }) {
-  return (
-    <ellipse cx={cx} cy={cy} rx={rx} ry={ry}
-      fill="rgba(0,0,0,0.18)" style={{ filter: 'blur(3px)' }} />
-  );
-}
-
-// Строит профиль стелы (фронтальная + боковая + верхняя грань с нужной формой верха)
+// Стела с фигурным верхом — все 6 граней.
+// Для арки и фигурной формы боковые грани остаются прямоугольными (одинаковая глубина),
+// а передняя и задняя — фигурные. Верхней плоской грани нет (есть скошенный верх).
 function IsoStele({
-  x, y, z, w, d, h,
-  shape, // 'rect' | 'arch' | 'peak'
-  colors, ox, oy,
+  x, y, z, w, d, h, shape, colors, ox, oy,
 }: {
   x: number; y: number; z: number; w: number; d: number; h: number;
   shape: 'rect' | 'arch' | 'peak';
   colors: BoxColors; ox: number; oy: number;
 }) {
-  const p = (dx: number, dy: number, dz: number): [number, number] =>
-    proj(x + dx, y + dy, z + dz, ox, oy);
+  const p3 = (dx: number, dy: number, dz: number): [number,number] =>
+    proj(x+dx, y+dy, z+dz, ox, oy);
 
-  // ─ Фронтальная грань (y=0) ─
-  let frontPts: [number, number][] = [];
+  const s = '#0f0f0f';
 
-  if (shape === 'arch') {
-    // Прямоугольник с полукруглым верхом (арка)
-    const arcSteps = 16;
-    const arcR = w / 2;
-    const archBaseZ = h - arcR; // начало арки
-    frontPts = [
-      p(0, 0, 0), p(w, 0, 0),  // основание
-      p(w, 0, archBaseZ),        // правый угол перед аркой
-    ];
-    for (let i = 0; i <= arcSteps; i++) {
-      const t = (i / arcSteps) * Math.PI; // от 0 до π
-      const ax = x + w / 2 + arcR * Math.cos(Math.PI - t);
-      const az = z + archBaseZ + arcR * Math.sin(t);
-      frontPts.push(proj(ax, y, az, ox, oy));
+  // Генерирует точки профиля верха стелы при y=yOff
+  const profilePts = (yOff: number): [number,number][] => {
+    if (shape === 'arch') {
+      const arcR = w / 2;
+      const archBase = h - arcR;
+      const pts: [number,number][] = [
+        p3(0, yOff, 0), p3(w, yOff, 0),
+        p3(w, yOff, archBase),
+      ];
+      const steps = 20;
+      for (let i = 0; i <= steps; i++) {
+        const t = (i / steps) * Math.PI;
+        pts.push(proj(x + w/2 + arcR*Math.cos(Math.PI-t), y+yOff, z + archBase + arcR*Math.sin(t), ox, oy));
+      }
+      pts.push(p3(0, yOff, archBase));
+      return pts;
     }
-    frontPts.push(p(0, 0, archBaseZ));
-
-  } else if (shape === 'peak') {
-    // Фигурная: боковые выступы и центральная вершина
-    frontPts = [
-      p(0, 0, 0), p(w, 0, 0),
-      p(w, 0, h * 0.78),
-      p(w * 0.72, 0, h * 0.93),
-      p(w * 0.5, 0, h),         // центральный пик
-      p(w * 0.28, 0, h * 0.93),
-      p(0, 0, h * 0.78),
-    ];
-  } else {
-    frontPts = [p(0,0,0), p(w,0,0), p(w,0,h), p(0,0,h)];
-  }
-
-  const frontPath = pts2path(frontPts);
-
-  // ─ Правая боковая грань (x=w) ─ всегда прямоугольная
-  const sidePts: [number, number][] = [
-    p(w, 0, 0), p(w, d, 0), p(w, d, h), p(w, 0, h),
-  ];
-  const sidePath = pts2path(sidePts);
-
-  // ─ Верхняя грань — горизонтальный срез на высоте h (только для rect) ─
-  const topPts: [number, number][] = [
-    p(0,0,h), p(w,0,h), p(w,d,h), p(0,d,h),
-  ];
-  const topPath = pts2path(topPts);
-
-  // Для арки и фигурной — верхнего плоского среза нет (заострение/арка)
-  // Рисуем заднюю боковую грань (y=d) — нужна для арки чтобы не было дыр
-  // Задняя грань совпадает с фронтальной по форме но сдвинута на d
-  let backFrontPts: [number, number][] = [];
-  if (shape === 'arch') {
-    const arcSteps = 16;
-    const arcR = w / 2;
-    const archBaseZ = h - arcR;
-    backFrontPts = [p(0, d, 0), p(w, d, 0), p(w, d, archBaseZ)];
-    for (let i = 0; i <= arcSteps; i++) {
-      const t = (i / arcSteps) * Math.PI;
-      const ax = x + w / 2 + arcR * Math.cos(Math.PI - t);
-      const az = z + archBaseZ + arcR * Math.sin(t);
-      backFrontPts.push(proj(ax, y + d, az, ox, oy));
+    if (shape === 'peak') {
+      return [
+        p3(0,   yOff, 0),
+        p3(w,   yOff, 0),
+        p3(w,   yOff, h*0.78),
+        p3(w*0.72, yOff, h*0.92),
+        p3(w*0.5,  yOff, h),
+        p3(w*0.28, yOff, h*0.92),
+        p3(0,   yOff, h*0.78),
+      ];
     }
-    backFrontPts.push(p(0, d, archBaseZ));
-  } else if (shape === 'peak') {
-    backFrontPts = [
-      p(0,d,0), p(w,d,0),
-      p(w,d,h*0.78), p(w*0.72,d,h*0.93),
-      p(w*0.5,d,h), p(w*0.28,d,h*0.93), p(0,d,h*0.78),
-    ];
-  }
+    // rect
+    return [p3(0,yOff,0), p3(w,yOff,0), p3(w,yOff,h), p3(0,yOff,h)];
+  };
+
+  const frontPts = profilePts(0);
+  const backPts  = profilePts(d);
+
+  // Нижняя грань (z=0) — всегда прямоугольник
+  const faceBot  = pts2path([p3(0,0,0), p3(w,0,0), p3(w,d,0), p3(0,d,0)]);
+  // Задняя грань (y=d)
+  const faceBack = pts2path(backPts);
+  // Левая грань (x=0) — прямоугольник нужной высоты
+  const leftH = shape === 'rect' ? h : shape === 'peak' ? h*0.78 : (h - w/2);
+  const faceLeft = pts2path([p3(0,0,0), p3(0,d,0), p3(0,d,leftH), p3(0,0,leftH)]);
+  // Правая грань (x=w)
+  const faceRight = pts2path([p3(w,0,0), p3(w,d,0), p3(w,d,leftH), p3(w,0,leftH)]);
+  // Передняя грань (y=0)
+  const faceFront = pts2path(frontPts);
+  // Верхняя плоская грань только для rect
+  const faceTop = pts2path([p3(0,0,h), p3(w,0,h), p3(w,d,h), p3(0,d,h)]);
 
   return (
     <g>
-      {/* Задняя стена (y=d) для арки/фигурной — рисуется первой */}
-      {shape !== 'rect' && backFrontPts.length > 0 && (
-        <path d={pts2path(backFrontPts)} fill={colors.right} stroke="#111" strokeWidth={0.5} strokeLinejoin="round" />
-      )}
-      {/* Правая боковая */}
-      <path d={sidePath} fill={colors.right} stroke="#111" strokeWidth={0.5} strokeLinejoin="round" />
-      {/* Фронтальная */}
-      <path d={frontPath} fill={colors.left} stroke="#111" strokeWidth={0.5} strokeLinejoin="round" />
-      {/* Верх (только прямоугольник) */}
+      <path d={faceBot}   fill={colors.back}  stroke={s} strokeWidth={0.5} strokeLinejoin="round"/>
+      <path d={faceBack}  fill={colors.back}  stroke={s} strokeWidth={0.5} strokeLinejoin="round"/>
+      <path d={faceLeft}  fill={colors.left}  stroke={s} strokeWidth={0.5} strokeLinejoin="round"/>
+      <path d={faceRight} fill={colors.side}  stroke={s} strokeWidth={0.5} strokeLinejoin="round"/>
+      <path d={faceFront} fill={colors.front} stroke={s} strokeWidth={0.5} strokeLinejoin="round"/>
       {shape === 'rect' && (
-        <path d={topPath} fill={colors.top} stroke="#111" strokeWidth={0.5} strokeLinejoin="round" />
+        <path d={faceTop} fill={colors.top} stroke={s} strokeWidth={0.5} strokeLinejoin="round"/>
       )}
     </g>
   );
@@ -390,7 +354,9 @@ function MonumentPreview({ config }: { config: ConfigState }) {
   const coverColors  = config.cover === 'cov-gravel' ? GRAVEL : TILE;
   const flowerColors = config.flowerbed === 'fl-granite' ? GRANITE_FL : GRASS;
 
-  // Тень под памятником
+  // Тень под памятником: центр проекции основания самого широкого элемента
+  const shadowBaseW = hasFlowerbed ? flowerW : hasCover ? coverW : hasPlate ? plateW : hasTomb ? tombW : sW;
+  const shadowBaseD = hasFlowerbed ? flowerD : hasCover ? coverD : hasPlate ? plateD : hasTomb ? tombD : sD;
   const [shadowX, shadowY] = proj(0, 0, 0, OX, OY);
 
   return (
@@ -431,10 +397,10 @@ function MonumentPreview({ config }: { config: ConfigState }) {
 
       {/* Тень от памятника */}
       <ellipse
-        cx={shadowX + 10} cy={shadowY + 4}
-        rx={Math.max(flowerW, tombW, sW) * 0.52}
-        ry={Math.max(flowerD, tombD, sD) * 0.26}
-        fill="rgba(0,0,0,0.22)"
+        cx={shadowX} cy={shadowY + 2}
+        rx={shadowBaseW * 0.5}
+        ry={shadowBaseD * 0.24}
+        fill="rgba(0,0,0,0.20)"
         filter="url(#blur3)"
       />
 
@@ -516,10 +482,6 @@ function MonumentPreview({ config }: { config: ConfigState }) {
         const vBaseZ = tombH > 0 ? tombZ + tombH : (pedH > 0 ? pedZ + pedH : steleZ);
         const vH = config.vase === 'vas-modern' ? 26 : 22;
         const vW = 10; const vD = 10;
-
-        // Простой изометрический цилиндр-ваза: низ шире, верх уже
-        const [bx, by] = proj(vX + vW / 2, vY + vD / 2, vBaseZ, OX, OY);
-        const [tx, ty] = proj(vX + vW / 2, vY + vD / 2, vBaseZ + vH, OX, OY);
 
         // Рисуем как IsoBox с небольшими пропорциями
         return (
