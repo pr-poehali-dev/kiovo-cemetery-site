@@ -126,7 +126,134 @@ function fmt(n: number) {
   return n.toLocaleString('ru-RU') + ' ₽';
 }
 
-// ── SVG Превью ──────────────────────────────────────────────────────────────
+// ── Изометрия: вспомогательные функции ────────────────────────────────────────
+// Изометрическая проекция: (x, y, z) → (svgX, svgY)
+// x — вправо, y — глубина (вдаль), z — вверх
+function iso(x: number, y: number, z: number, ox: number, oy: number): [number, number] {
+  const sx = ox + (x - y) * Math.cos(Math.PI / 6) * 1;
+  const sy = oy + (x + y) * Math.sin(Math.PI / 6) * 1 - z;
+  return [sx, sy];
+}
+
+function isoPath(points: [number, number, number][], ox: number, oy: number): string {
+  return points.map(([x, y, z], i) => {
+    const [sx, sy] = iso(x, y, z, ox, oy);
+    return `${i === 0 ? 'M' : 'L'} ${sx.toFixed(1)} ${sy.toFixed(1)}`;
+  }).join(' ') + ' Z';
+}
+
+// Рисует изометрический параллелепипед
+interface IsoBoxProps {
+  x: number; y: number; z: number;   // координаты нижней передней левой точки
+  w: number; d: number; h: number;   // ширина, глубина, высота
+  colorTop: string; colorLeft: string; colorRight: string;
+  ox: number; oy: number;
+}
+function IsoBox({ x, y, z, w, d, h, colorTop, colorLeft, colorRight, ox, oy }: IsoBoxProps) {
+  // Верхняя грань
+  const top = isoPath([
+    [x,     y,     z + h],
+    [x + w, y,     z + h],
+    [x + w, y + d, z + h],
+    [x,     y + d, z + h],
+  ], ox, oy);
+  // Левая (передняя) грань
+  const left = isoPath([
+    [x,     y,     z],
+    [x + w, y,     z],
+    [x + w, y,     z + h],
+    [x,     y,     z + h],
+  ], ox, oy);
+  // Правая (боковая) грань
+  const right = isoPath([
+    [x + w, y,     z],
+    [x + w, y + d, z],
+    [x + w, y + d, z + h],
+    [x + w, y,     z + h],
+  ], ox, oy);
+
+  return (
+    <g>
+      <path d={left}  fill={colorLeft}  stroke="#1a1a1a" strokeWidth={0.4} />
+      <path d={right} fill={colorRight} stroke="#1a1a1a" strokeWidth={0.4} />
+      <path d={top}   fill={colorTop}   stroke="#1a1a1a" strokeWidth={0.4} />
+    </g>
+  );
+}
+
+// Изометрическая трапеция-стела (фронтальная грань + верхняя + боковая)
+interface IsoSlabProps {
+  x: number; y: number; z: number;
+  w: number; d: number; h: number;
+  topShape: 'rect' | 'arch' | 'peak' | 'combo-top' | 'combo-bot';
+  colorFront: string; colorSide: string; colorTop: string;
+  ox: number; oy: number;
+}
+function IsoSlab({ x, y, z, w, d, h, topShape, colorFront, colorSide, colorTop, ox, oy }: IsoSlabProps) {
+  // Фронтальная грань — меняется в зависимости от типа
+  const frontPoints: [number, number, number][] = [];
+  if (topShape === 'arch') {
+    // Имитация арки через множество точек
+    const steps = 12;
+    const arcH = h * 0.22;
+    // нижние точки
+    frontPoints.push([x, y, z], [x + w, y, z]);
+    // правый подъём
+    frontPoints.push([x + w, y, z + h - arcH]);
+    // арка по верху (правая → левая)
+    for (let i = steps; i >= 0; i--) {
+      const t = (i / steps) * Math.PI;
+      const px = x + w / 2 + (w / 2) * Math.cos(t);
+      const pz = z + h - arcH + arcH * Math.sin(t);
+      frontPoints.push([px, y, pz]);
+    }
+    frontPoints.push([x, y, z + h - arcH]);
+  } else if (topShape === 'peak') {
+    frontPoints.push(
+      [x, y, z],
+      [x + w, y, z],
+      [x + w, y, z + h - h * 0.12],
+      [x + w * 0.72, y, z + h],
+      [x + w * 0.5, y, z + h + h * 0.09],
+      [x + w * 0.28, y, z + h],
+      [x, y, z + h - h * 0.12],
+    );
+  } else {
+    // rect / combo-top / combo-bot — просто прямоугольник
+    frontPoints.push([x, y, z], [x + w, y, z], [x + w, y, z + h], [x, y, z + h]);
+  }
+
+  const frontPath = frontPoints.map(([px, py, pz], i) => {
+    const [sx, sy] = iso(px, py, pz, ox, oy);
+    return `${i === 0 ? 'M' : 'L'} ${sx.toFixed(1)} ${sy.toFixed(1)}`;
+  }).join(' ') + ' Z';
+
+  // Боковая грань — используем rect-форму (упрощение)
+  const sideRight = isoPath([
+    [x + w, y,     z],
+    [x + w, y + d, z],
+    [x + w, y + d, z + h],
+    [x + w, y,     z + h],
+  ], ox, oy);
+
+  // Верхняя грань
+  const topFace = isoPath([
+    [x,     y,     z + h],
+    [x + w, y,     z + h],
+    [x + w, y + d, z + h],
+    [x,     y + d, z + h],
+  ], ox, oy);
+
+  return (
+    <g>
+      <path d={frontPath} fill={colorFront} stroke="#1a1a1a" strokeWidth={0.4} />
+      <path d={sideRight}  fill={colorSide}  stroke="#1a1a1a" strokeWidth={0.4} />
+      {topShape === 'rect' && <path d={topFace} fill={colorTop} stroke="#1a1a1a" strokeWidth={0.4} />}
+    </g>
+  );
+}
+
+// ── 3D Превью памятника ────────────────────────────────────────────────────────
 
 function MonumentPreview({ config }: { config: ConfigState }) {
   const hasPedestal  = config.pedestal !== 'ped-none';
@@ -138,171 +265,301 @@ function MonumentPreview({ config }: { config: ConfigState }) {
   const hasDecor     = config.decor !== 'dec-none';
   const twoPersons   = config.persons === '2';
 
-  const steleW = twoPersons ? 200 : 120;
-  const steleH = config.stele === 'stele-combo' ? 200
-    : config.stele === 'stele-figured' ? 215
-    : config.stele === 'stele-arch' ? 205 : 190;
+  const SVG_W = 380;
+  const SVG_H = 420;
+  // Точка начала координат в SVG
+  const OX = SVG_W / 2;
+  const OY = SVG_H - 60;
 
-  const pedestalH = config.pedestal === 'ped-high' ? 50 : config.pedestal === 'ped-mid' ? 35 : (hasPedestal ? 20 : 0);
-  const tombH     = config.tomb === 'tomb-large' ? 28 : (hasTomb ? 18 : 0);
-  const plateH    = hasPlate ? 14 : 0;
-  const coverH    = hasCover ? 10 : 0;
-  const flowerH   = hasFlowerbed ? 22 : 0;
+  // Масштаб: 1 единица = px в изометрии
+  const S = 1;
 
-  const svgW = 340;
-  const svgH = 400;
-  const groundY = svgH - 40;
+  // Размеры (в изо-единицах)
+  const sW = twoPersons ? 90 : 60;   // ширина стелы
+  const sD = 14;                      // глубина стелы
+  const sH = config.stele === 'stele-combo' ? 140
+    : config.stele === 'stele-figured' ? 155
+    : config.stele === 'stele-arch' ? 150 : 140;
 
-  const totalBaseH = pedestalH + tombH + plateH + coverH + flowerH;
-  const steleBottomY = groundY - totalBaseH - steleH;
-  const pedestalY    = steleBottomY + steleH;
-  const tombY        = pedestalY + pedestalH;
-  const plateY       = tombY + tombH;
-  const coverY       = plateY + plateH;
-  const flowerY      = coverY + coverH;
-  const steleX       = (svgW - steleW) / 2;
+  const pedH = config.pedestal === 'ped-high' ? 36
+    : config.pedestal === 'ped-mid' ? 24
+    : hasPedestal ? 14 : 0;
+  const pedW = sW + 10;
+  const pedD = sD + 8;
 
-  const dark  = '#2A2A2A';
-  const mid   = '#3D3D3D';
-  const goldC = '#C9A84C';
+  const tombH = config.tomb === 'tomb-large' ? 20 : hasTomb ? 12 : 0;
+  const tombW = sW + 22;
+  const tombD = sD + 18;
 
-  const SteleShape = () => {
-    if (config.stele === 'stele-arch') {
-      const arcH = 42;
-      return (
-        <path
-          d={`M ${steleX} ${steleBottomY + arcH}
-              Q ${steleX} ${steleBottomY} ${steleX + steleW / 2} ${steleBottomY}
-              Q ${steleX + steleW} ${steleBottomY} ${steleX + steleW} ${steleBottomY + arcH}
-              L ${steleX + steleW} ${steleBottomY + steleH}
-              L ${steleX} ${steleBottomY + steleH} Z`}
-          fill={dark}
-        />
-      );
-    }
-    if (config.stele === 'stele-figured') {
-      return (
-        <path
-          d={`M ${steleX} ${steleBottomY + steleH}
-              L ${steleX} ${steleBottomY + 40}
-              Q ${steleX} ${steleBottomY} ${steleX + steleW * 0.28} ${steleBottomY}
-              Q ${steleX + steleW * 0.5} ${steleBottomY - 18} ${steleX + steleW * 0.72} ${steleBottomY}
-              Q ${steleX + steleW} ${steleBottomY} ${steleX + steleW} ${steleBottomY + 40}
-              L ${steleX + steleW} ${steleBottomY + steleH} Z`}
-          fill={dark}
-        />
-      );
-    }
-    if (config.stele === 'stele-combo') {
-      const rx = steleX + steleW * 0.15;
-      const rw2 = steleW * 0.7;
-      return (
-        <g>
-          <rect x={steleX} y={steleBottomY + 80} width={steleW} height={steleH - 80} fill={dark} />
-          <rect x={rx} y={steleBottomY} width={rw2} height={90} fill={mid} />
-        </g>
-      );
-    }
-    return <rect x={steleX} y={steleBottomY} width={steleW} height={steleH} fill={dark} />;
-  };
+  const plateH = hasPlate ? 8 : 0;
+  const plateW = sW + 30;
+  const plateD = sD + 50;
+
+  const coverH = hasCover ? 5 : 0;
+  const coverW = plateW;
+  const coverD = plateD;
+
+  const flowerBorderH = hasFlowerbed ? 10 : 0;
+  const flowerW = sW + 50;
+  const flowerD = sD + 80;
+
+  // Все элементы стоят на оси Z=0 (земля) и растут вверх
+  // считаем z-координаты снизу вверх
+  let curZ = 0;
+
+  const flowerZ  = curZ; curZ += flowerBorderH;
+  const coverZ   = curZ; curZ += coverH;
+  const plateZ   = curZ; curZ += plateH;
+  const tombZ    = curZ; curZ += tombH;
+  const pedZ     = curZ; curZ += pedH;
+  const steleZ   = curZ;
+
+  // Центровка по x, y
+  const cx = (obj: number) => -obj / 2;
+  const cy = (obj: number) => -obj / 2;
+
+  // Цвета
+  const GRANITE_FRONT = '#303030';
+  const GRANITE_SIDE  = '#222222';
+  const GRANITE_TOP   = '#404040';
+
+  const GRANITE2_FRONT = '#3a3a3a';
+  const GRANITE2_SIDE  = '#2a2a2a';
+  const GRANITE2_TOP   = '#4a4a4a';
+
+  const GOLD = '#C9A84C';
+  const GOLD_D = '#9A7B34';
+
+  const plateColor = config.plate === 'pl-paving'
+    ? { front: '#8A7A68', side: '#6A5A4A', top: '#9A8A78' }
+    : { front: GRANITE_FRONT, side: GRANITE_SIDE, top: GRANITE_TOP };
+
+  const coverColor = config.cover === 'cov-gravel'
+    ? { front: '#C0B8A0', side: '#A0A090', top: '#D0C8B0' }
+    : { front: '#555', side: '#444', top: '#666' };
+
+  const flowerColor = config.flowerbed === 'fl-granite'
+    ? { front: GRANITE_FRONT, side: GRANITE_SIDE, top: GRANITE_TOP }
+    : { front: '#6A8050', side: '#4A6030', top: '#7A9060' };
+
+  const topShape = config.stele === 'stele-arch' ? 'arch'
+    : config.stele === 'stele-figured' ? 'peak'
+    : 'rect';
+
+  // Помощник: изо-координата + окружность (для вазы)
+  const isoXY = (x: number, y: number, z: number) => iso(x * S, y * S, z * S, OX, OY);
 
   return (
-    <svg viewBox={`0 0 ${svgW} ${svgH}`} width="100%" style={{ maxHeight: 370, display: 'block', margin: '0 auto' }} aria-label="Схема памятника">
-      <rect width={svgW} height={svgH} fill="#F5F0E8" />
-      <rect x={0} y={groundY} width={svgW} height={svgH - groundY} fill="#6B7C5A" opacity="0.3" />
-      <line x1={0} y1={groundY} x2={svgW} y2={groundY} stroke="#8B9A72" strokeWidth={1.5} />
+    <svg
+      viewBox={`0 0 ${SVG_W} ${SVG_H}`}
+      width="100%"
+      style={{ maxHeight: 400, display: 'block', margin: '0 auto', transition: 'all 0.3s ease' }}
+      aria-label="3D-схема памятника"
+    >
+      <defs>
+        <radialGradient id="groundGrad" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="#C8D8B0" />
+          <stop offset="100%" stopColor="#8FA870" />
+        </radialGradient>
+        <linearGradient id="skyGrad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#E8E4DC" />
+          <stop offset="100%" stopColor="#F5F0E8" />
+        </linearGradient>
+      </defs>
 
-      {hasCover && (
-        <rect x={steleX - 22} y={coverY} width={steleW + 44} height={coverH}
-          fill={config.cover === 'cov-gravel' ? '#D1C9B8' : '#5C5C5C'} rx={1} />
-      )}
-      {hasPlate && (
-        <rect x={steleX - 16} y={plateY} width={steleW + 32} height={plateH}
-          fill={config.plate === 'pl-granite' ? '#3A3A3A' : '#B0A090'} rx={1} />
-      )}
+      {/* Фон */}
+      <rect width={SVG_W} height={SVG_H} fill="url(#skyGrad)" />
+
+      {/* Земля — изометрический ромб */}
+      {(() => {
+        const gSize = 120;
+        const pts: [number,number,number][] = [
+          [-gSize, 0, 0], [gSize, 0, 0], [gSize, gSize * 1.2, 0], [-gSize, gSize * 1.2, 0]
+        ];
+        const d = isoPath(pts, OX, OY);
+        return <path d={d} fill="url(#groundGrad)" stroke="#7A9060" strokeWidth={0.5} />;
+      })()}
+
+      {/* Цветник — основание */}
       {hasFlowerbed && (
-        <g>
-          <rect x={steleX - 28} y={flowerY} width={steleW + 56} height={flowerH}
-            fill={config.flowerbed === 'fl-granite' ? '#3D3D3D' : '#7A9B5A'} rx={2} />
-          {config.flowerbed === 'fl-granite' && (
-            <>
-              <rect x={steleX - 28} y={flowerY} width={6} height={flowerH} fill="#4A4A4A" />
-              <rect x={steleX + steleW + 22} y={flowerY} width={6} height={flowerH} fill="#4A4A4A" />
-            </>
-          )}
-        </g>
+        <IsoBox
+          x={cx(flowerW)} y={cy(flowerD)} z={flowerZ * S}
+          w={flowerW} d={flowerD} h={flowerBorderH}
+          colorTop={flowerColor.top}
+          colorLeft={flowerColor.front}
+          colorRight={flowerColor.side}
+          ox={OX} oy={OY}
+        />
       )}
+
+      {/* Покрытие */}
+      {hasCover && (
+        <IsoBox
+          x={cx(coverW)} y={cy(coverD)} z={coverZ * S}
+          w={coverW} d={coverD} h={coverH}
+          colorTop={coverColor.top}
+          colorLeft={coverColor.front}
+          colorRight={coverColor.side}
+          ox={OX} oy={OY}
+        />
+      )}
+
+      {/* Плита */}
+      {hasPlate && (
+        <IsoBox
+          x={cx(plateW)} y={cy(plateD)} z={plateZ * S}
+          w={plateW} d={plateD} h={plateH}
+          colorTop={plateColor.top}
+          colorLeft={plateColor.front}
+          colorRight={plateColor.side}
+          ox={OX} oy={OY}
+        />
+      )}
+
+      {/* Тумба */}
       {hasTomb && (
-        <rect x={steleX - 12} y={tombY} width={steleW + 24} height={tombH} fill={dark} rx={1} />
+        <IsoBox
+          x={cx(tombW)} y={cy(tombD)} z={tombZ * S}
+          w={tombW} d={tombD} h={tombH}
+          colorTop={GRANITE_TOP}
+          colorLeft={GRANITE_FRONT}
+          colorRight={GRANITE_SIDE}
+          ox={OX} oy={OY}
+        />
       )}
+
+      {/* Цоколь */}
       {hasPedestal && (
-        <rect x={steleX - 6} y={pedestalY} width={steleW + 12} height={pedestalH} fill={mid} rx={1} />
+        <IsoBox
+          x={cx(pedW)} y={cy(pedD)} z={pedZ * S}
+          w={pedW} d={pedD} h={pedH}
+          colorTop={GRANITE2_TOP}
+          colorLeft={GRANITE2_FRONT}
+          colorRight={GRANITE2_SIDE}
+          ox={OX} oy={OY}
+        />
       )}
 
-      <SteleShape />
-
-      {/* Декор */}
-      {hasDecor && config.decor === 'dec-cross' && (
-        <g fill={goldC} opacity={0.9}>
-          <rect x={steleX + steleW / 2 - 3} y={steleBottomY + 20} width={6} height={42} />
-          <rect x={steleX + steleW / 2 - 15} y={steleBottomY + 34} width={30} height={6} />
+      {/* Стела */}
+      {config.stele === 'stele-combo' ? (
+        // Комбинированная: нижняя широкая часть + верхняя узкая
+        <g>
+          <IsoBox
+            x={cx(sW)} y={cy(sD)} z={steleZ * S}
+            w={sW} d={sD} h={sH * 0.45}
+            colorTop={GRANITE_TOP}
+            colorLeft={GRANITE_FRONT}
+            colorRight={GRANITE_SIDE}
+            ox={OX} oy={OY}
+          />
+          <IsoBox
+            x={cx(sW * 0.65)} y={cy(sD)} z={(steleZ + sH * 0.42) * S}
+            w={sW * 0.65} d={sD} h={sH * 0.6}
+            colorTop={GRANITE2_TOP}
+            colorLeft={GRANITE2_FRONT}
+            colorRight={GRANITE2_SIDE}
+            ox={OX} oy={OY}
+          />
         </g>
+      ) : (
+        <IsoSlab
+          x={cx(sW)} y={cy(sD)} z={steleZ * S}
+          w={sW} d={sD} h={sH}
+          topShape={topShape}
+          colorFront={GRANITE_FRONT}
+          colorSide={GRANITE_SIDE}
+          colorTop={GRANITE_TOP}
+          ox={OX} oy={OY}
+        />
       )}
-      {hasDecor && (config.decor === 'dec-portrait' || config.decor === 'dec-cross-port') && (() => {
-        const py = config.decor === 'dec-cross-port' ? steleBottomY + 58 : steleBottomY + 24;
+
+      {/* Декор на лицевой грани стелы */}
+      {hasDecor && (() => {
+        // Центр фронтальной грани стелы в SVG
+        const faceCx = cx(sW) + sW / 2;
+        const decorBaseZ = steleZ + sH * 0.55;
+        const [sx, sy] = iso(faceCx, cy(sD), decorBaseZ, OX, OY);
+        const [topSx, topSy] = iso(faceCx, cy(sD), steleZ + sH * 0.12, OX, OY);
+
+        if (config.decor === 'dec-cross' || config.decor === 'dec-cross-port') {
+          return (
+            <g fill={GOLD} opacity={0.92}>
+              <rect x={topSx - 3} y={topSy - 44} width={6} height={46} rx={1} />
+              <rect x={topSx - 16} y={topSy - 28} width={32} height={6} rx={1} />
+            </g>
+          );
+        }
+        if (config.decor === 'dec-portrait') {
+          return (
+            <g>
+              <rect x={sx - 22} y={sy - 28} width={44} height={50}
+                fill="none" stroke={GOLD} strokeWidth={1.5} rx={2} />
+              <circle cx={sx} cy={sy - 8} r={15} fill="#2a2a2a" stroke={GOLD} strokeWidth={0.5} />
+              <circle cx={sx} cy={sy - 12} r={7} fill="#404040" />
+            </g>
+          );
+        }
+        if (config.decor === 'dec-pattern') {
+          return (
+            <g stroke={GOLD} strokeWidth={1} fill="none" opacity={0.7}>
+              <path d={`M ${topSx - 22} ${topSy + 8} Q ${topSx} ${topSy - 8} ${topSx + 22} ${topSy + 8}`} />
+              <path d={`M ${topSx - 18} ${topSy + 20} Q ${topSx} ${topSy + 4} ${topSx + 18} ${topSy + 20}`} />
+              <circle cx={topSx} cy={topSy + 34} r={12} />
+              <circle cx={topSx} cy={topSy + 34} r={5} />
+            </g>
+          );
+        }
+        return null;
+      })()}
+
+      {/* Надпись-гравировка на стеле */}
+      {(() => {
+        const faceCx = cx(sW) + sW / 2;
+        const [sx, sy] = iso(faceCx, cy(sD), steleZ + sH * 0.28, OX, OY);
+        const lineW = sW * 0.55;
         return (
-          <g>
-            {config.decor === 'dec-cross-port' && (
-              <g fill={goldC} opacity={0.85}>
-                <rect x={steleX + steleW / 2 - 3} y={steleBottomY + 18} width={5} height={32} />
-                <rect x={steleX + steleW / 2 - 12} y={steleBottomY + 29} width={24} height={5} />
-              </g>
-            )}
-            <rect x={steleX + steleW / 2 - 23} y={py} width={46} height={56}
-              fill="none" stroke={goldC} strokeWidth={1.5} rx={2} />
-            <circle cx={steleX + steleW / 2} cy={py + 20} r={14} fill={mid} />
-            <circle cx={steleX + steleW / 2} cy={py + 16} r={6} fill="#555" />
-            <path d={`M ${steleX + steleW / 2 - 14} ${py + 34} Q ${steleX + steleW / 2} ${py + 28} ${steleX + steleW / 2 + 14} ${py + 34}`}
-              fill={mid} stroke="none" />
+          <g opacity={0.28} stroke="white" strokeWidth={1.2}>
+            <line x1={sx - lineW * 0.5} y1={sy}      x2={sx + lineW * 0.5} y2={sy} />
+            <line x1={sx - lineW * 0.4} y1={sy + 9}  x2={sx + lineW * 0.4} y2={sy + 9} />
+            <line x1={sx - lineW * 0.3} y1={sy + 18} x2={sx + lineW * 0.3} y2={sy + 18} />
           </g>
         );
       })()}
-      {hasDecor && config.decor === 'dec-pattern' && (
-        <g stroke={goldC} strokeWidth={1} fill="none" opacity={0.65}>
-          <path d={`M ${steleX + 16} ${steleBottomY + 28} Q ${steleX + steleW / 2} ${steleBottomY + 8} ${steleX + steleW - 16} ${steleBottomY + 28}`} />
-          <path d={`M ${steleX + 20} ${steleBottomY + 44} Q ${steleX + steleW / 2} ${steleBottomY + 24} ${steleX + steleW - 20} ${steleBottomY + 44}`} />
-          <circle cx={steleX + steleW / 2} cy={steleBottomY + 60} r={14} />
-          <circle cx={steleX + steleW / 2} cy={steleBottomY + 60} r={6} />
-        </g>
-      )}
-
-      {/* Линии надписи */}
-      <g opacity={0.3}>
-        <line x1={steleX + 14} y1={steleBottomY + steleH - 54} x2={steleX + steleW - 14} y2={steleBottomY + steleH - 54} stroke="white" strokeWidth={1.5} />
-        <line x1={steleX + 20} y1={steleBottomY + steleH - 41} x2={steleX + steleW - 20} y2={steleBottomY + steleH - 41} stroke="white" strokeWidth={1.5} />
-        <line x1={steleX + 24} y1={steleBottomY + steleH - 29} x2={steleX + steleW - 24} y2={steleBottomY + steleH - 29} stroke="white" strokeWidth={1.5} />
-      </g>
-
-      {/* Ваза */}
-      {hasVase && (
-        <g>
-          <ellipse cx={steleX + steleW + 22} cy={tombY > groundY ? groundY - 2 : tombY - 2} rx={10} ry={5} fill={dark} />
-          <path d={`M ${steleX + steleW + 12} ${tombY > groundY ? groundY - 2 : tombY - 2}
-                    Q ${steleX + steleW + 10} ${tombY > groundY ? groundY - 28 : tombY - 28}
-                      ${steleX + steleW + 22} ${tombY > groundY ? groundY - 30 : tombY - 30}
-                    Q ${steleX + steleW + 34} ${tombY > groundY ? groundY - 28 : tombY - 28}
-                      ${steleX + steleW + 32} ${tombY > groundY ? groundY - 2 : tombY - 2} Z`}
-            fill={dark} />
-        </g>
-      )}
 
       {/* Разделитель 2 лица */}
-      {twoPersons && (
-        <line x1={steleX + steleW / 2} y1={steleBottomY + 8} x2={steleX + steleW / 2} y2={steleBottomY + steleH - 22}
-          stroke={goldC} strokeWidth={0.8} strokeDasharray="4 3" opacity={0.5} />
-      )}
+      {twoPersons && (() => {
+        const [bx, by] = iso(0, cy(sD), steleZ, OX, OY);
+        const [tx, ty] = iso(0, cy(sD), steleZ + sH, OX, OY);
+        return (
+          <line x1={bx} y1={by} x2={tx} y2={ty}
+            stroke={GOLD} strokeWidth={0.8} strokeDasharray="5 3" opacity={0.5} />
+        );
+      })()}
 
-      <text x={svgW / 2} y={svgH - 8} textAnchor="middle" fontSize={10} fill="#8B8B8B" fontFamily="Golos Text, sans-serif">
+      {/* Ваза */}
+      {hasVase && (() => {
+        const vaseX = cx(sW) + sW + 12;
+        const vaseY = cy(sD);
+        const vaseZ = (tombH > 0 ? tombZ + tombH : steleZ);
+        const [vx, vy] = iso(vaseX, vaseY, vaseZ, OX, OY);
+        const vH = config.vase === 'vas-modern' ? 30 : 25;
+        return (
+          <g>
+            <ellipse cx={vx} cy={vy} rx={10} ry={4} fill={GRANITE_TOP} />
+            <path
+              d={`M ${vx - 9} ${vy} Q ${vx - 11} ${vy - vH * 0.7} ${vx - 6} ${vy - vH} Q ${vx} ${vy - vH - 5} ${vx + 6} ${vy - vH} Q ${vx + 11} ${vy - vH * 0.7} ${vx + 9} ${vy} Z`}
+              fill={GRANITE_FRONT}
+              stroke={GRANITE_SIDE}
+              strokeWidth={0.5}
+            />
+            <ellipse cx={vx} cy={vy - vH} rx={6} ry={2.5} fill={GRANITE2_TOP} />
+          </g>
+        );
+      })()}
+
+      {/* Подпись */}
+      <text x={SVG_W / 2} y={SVG_H - 8} textAnchor="middle"
+        fontSize={10} fill="#9B9B8B" fontFamily="Golos Text, sans-serif">
         Схема носит иллюстративный характер
       </text>
     </svg>
