@@ -294,7 +294,7 @@ function MonumentPreview({ config }: { config: ConfigState }) {
   const SVG_W = 400;
   const SVG_H = 460;
   const OX = SVG_W / 2 - 10;
-  const OY = SVG_H - 120;  // поднимаем, чтобы уместить плиту перед памятником
+  const OY = SVG_H - 80;  // горизонт внизу: ближний край (Y=0) — самый нижний
 
   // ─ Размеры ─
   // Система координат: памятник стоит у Y=0 (передняя стенка), уходит вглубь (Y+).
@@ -335,20 +335,26 @@ function MonumentPreview({ config }: { config: ConfigState }) {
   const pedZ   = curZ; curZ += pedH;
   const steleZ = curZ;
 
-  // ─ X-центровка: памятник по центру ─
-  // Y=0 — передняя стенка памятника. Перед ней (Y отрицательный) — могила.
+  // ─ Расстановка по Y ─
+  // Y=0 — самое ближнее к зрителю. Больший Y = дальше (вглубь сцены).
+  // Плита ближе к нам (малый Y), памятник дальше (большой Y).
+
+  const graveDepth = plateFront; // расстояние могилы перед памятником
+
+  // Плита — у зрителя (Y=0..plateFront)
+  const plateX = -plateW / 2; const plateY = 0;
+  // Покрытие — чуть меньше плиты по глубине
+  const covX   = -coverWid / 2; const covY   = 0;
+  // Цветник — охватывает всю могильную зону
+  const flX    = -flowerW / 2;  const flY    = 0;
+
+  // Памятник — за могилой (дальше от зрителя)
   const sX = -sW / 2;
-  const sY = 0;
+  const sY = graveDepth;  // задняя часть сцены
 
-  const pedX  = -pedW / 2;   const pedY  = -(pedD  - sD) / 2;
-  const tombX = -tombW / 2;  const tombY = -(tombD - sD) / 2;
-
-  // Плита — перед памятником
-  const plateX = -plateW / 2; const plateY = -plateFront;
-  // Покрытие — перед памятником
-  const covX   = -coverWid / 2; const covY   = -coverFront;
-  // Цветник — перед памятником
-  const flX    = -flowerW / 2;  const flY    = -flowerFront;
+  // Цоколь и тумба выровнены по передней стенке памятника
+  const pedX  = -pedW / 2;  const pedY  = graveDepth - (pedD  - sD) / 2;
+  const tombX = -tombW / 2; const tombY = graveDepth - (tombD - sD) / 2;
 
   // ─ Цвета ─
   const GRANITE    = makeColors('#2c2c2c');
@@ -371,9 +377,9 @@ function MonumentPreview({ config }: { config: ConfigState }) {
   const coverColors  = config.cover === 'cov-gravel' ? GRAVEL : TILE_C;
   const flowerColors = config.flowerbed === 'fl-granite' ? GRANITE_FL : GRASS;
 
-  // Тень — центр всей сцены (памятник + могильная зона перед ним)
-  const sceneDepth = flowerFront + sD;
-  const sceneCenterY = -flowerFront / 2;
+  // Тень — центр всей сцены
+  const sceneDepth = graveDepth + sD;
+  const sceneCenterY = sceneDepth / 2;
   const [shadowX, shadowY] = proj(0, sceneCenterY, 0, OX, OY);
   const shadowRX = Math.max(flowerW, tombW, sW) * 0.48;
   const shadowRY = sceneDepth * 0.16;
@@ -402,14 +408,14 @@ function MonumentPreview({ config }: { config: ConfigState }) {
       {/* Фон */}
       <rect width={SVG_W} height={SVG_H} fill="url(#skyG)" />
 
-      {/* Земля — покрывает и зону памятника, и зону могилы впереди */}
+      {/* Земля: Y=0 ближний к зрителю, Y большой — дальше */}
       {(() => {
-        const gX = 160; const gYf = 120; const gYb = 60;
+        const gX = 160; const gYnear = 0; const gYfar = 160;
         const gpts: [number,number][] = [
-          proj(-gX, -gYf, 0, OX, OY),
-          proj( gX, -gYf, 0, OX, OY),
-          proj( gX,  gYb, 0, OX, OY),
-          proj(-gX,  gYb, 0, OX, OY),
+          proj(-gX, gYnear, 0, OX, OY),
+          proj( gX, gYnear, 0, OX, OY),
+          proj( gX, gYfar,  0, OX, OY),
+          proj(-gX, gYfar,  0, OX, OY),
         ];
         return <path d={pts2path(gpts)} fill="url(#gGrad)" stroke="#7A9060" strokeWidth={0.6} />;
       })()}
@@ -421,34 +427,9 @@ function MonumentPreview({ config }: { config: ConfigState }) {
         fill="rgba(0,0,0,0.22)" filter="url(#blur3)"
       />
 
-      {/* Цветник — бортик, самый дальний из передних элементов */}
-      {hasFlowerbed && (
-        <IsoBox
-          x={flX} y={flY} z={0}
-          w={flowerW} d={flowerFront} h={flowerH}
-          colors={flowerColors} ox={OX} oy={OY}
-        />
-      )}
+      {/* Painter's order: сначала дальнее (большой Y = памятник), потом ближнее (малый Y = плита) */}
 
-      {/* Покрытие могилы — перед памятником */}
-      {hasCover && (
-        <IsoBox
-          x={covX} y={covY} z={0}
-          w={coverWid} d={coverFront} h={coverH}
-          colors={coverColors} ox={OX} oy={OY}
-        />
-      )}
-
-      {/* Плита могилы — перед памятником */}
-      {hasPlate && (
-        <IsoBox
-          x={plateX} y={plateY} z={0}
-          w={plateW} d={plateFront} h={plateH}
-          colors={plateColors} ox={OX} oy={OY}
-        />
-      )}
-
-      {/* Тумба */}
+      {/* Тумба — за могилой, у основания памятника */}
       {hasTomb && (
         <IsoBox
           x={tombX} y={tombY} z={tombZ}
@@ -466,7 +447,7 @@ function MonumentPreview({ config }: { config: ConfigState }) {
         />
       )}
 
-      {/* Стела */}
+      {/* Стела — дальше всего (большой Y) */}
       {config.stele === 'stele-combo' ? (
         <>
           <IsoBox x={sX} y={sY} z={steleZ}
@@ -482,6 +463,33 @@ function MonumentPreview({ config }: { config: ConfigState }) {
           w={sW} d={sD} h={sH}
           shape={shape} colors={steleColors}
           ox={OX} oy={OY}
+        />
+      )}
+
+      {/* Цветник — ближе к зрителю (меньший Y), рисуется после памятника */}
+      {hasFlowerbed && (
+        <IsoBox
+          x={flX} y={flY} z={0}
+          w={flowerW} d={flowerFront} h={flowerH}
+          colors={flowerColors} ox={OX} oy={OY}
+        />
+      )}
+
+      {/* Покрытие могилы — ещё ближе */}
+      {hasCover && (
+        <IsoBox
+          x={covX} y={covY} z={0}
+          w={coverWid} d={coverFront} h={coverH}
+          colors={coverColors} ox={OX} oy={OY}
+        />
+      )}
+
+      {/* Плита — самая ближняя к зрителю */}
+      {hasPlate && (
+        <IsoBox
+          x={plateX} y={plateY} z={0}
+          w={plateW} d={plateFront} h={plateH}
+          colors={plateColors} ox={OX} oy={OY}
         />
       )}
 
